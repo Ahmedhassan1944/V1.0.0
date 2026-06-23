@@ -1,0 +1,1100 @@
+<script>
+  /**
+   * =========================================================
+   * ENTERPRISE HR MOBILIZATION — FRONTEND SPA (Script.html)
+   * =========================================================
+   * Single-Page Application logic:
+   *  - State management
+   *  - Router / view renderer
+   *  - GAS bridge (google.script.run)
+   *  - Views: Dashboard, Candidates, New Candidate, Detail, Audit Log
+   * =========================================================
+   */
+
+  // ─────────────────────────────────────────────
+  // GLOBAL STATE
+  // ─────────────────────────────────────────────
+
+  const App = {
+    state: {
+      currentUser: { name: 'HR Coordinator', role: 'HR_COORDINATOR', email: '' },
+      currentView: 'dashboard',
+      candidates: [],
+      filteredCandidates: [],
+      selectedCandidate: null,
+      filterStatus: 'all',
+      searchQuery: '',
+      loading: false,
+      kpi: { activeCount: 0, missingDocs: 0, pendingValidation: 0, mobilized: 0 }
+    },
+
+    setState(partial) {
+      Object.assign(this.state, partial);
+    }
+  };
+
+  // ─────────────────────────────────────────────
+  // GAS BRIDGE
+  // ─────────────────────────────────────────────
+
+  const GAS = {
+    isLive: typeof google !== 'undefined' && !!google.script,
+
+    call(fnName, ...args) {
+      return new Promise((resolve, reject) => {
+        if (!this.isLive) {
+          resolve(this._mockData(fnName, ...args));
+          return;
+        }
+        let call = google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject);
+        call[fnName](...args);
+      });
+    },
+
+    // ── Mock data for local / offline preview ──
+    _mockData(fnName, ...args) {
+      const candidates = [
+        { CandidateID: 'c-001', FullName: 'Ahmed Ali', Position: 'Civil Engineer', Department: 'Projects', Email: 'ahmed@test.com', Nationality: 'Egyptian', CurrentStatus: 'Documents Requested', CreatedAt: '2026-06-01T08:00:00Z', DriveFolderID: 'folder-001' },
+        { CandidateID: 'c-002', FullName: 'Sara Mohamed', Position: 'HR Specialist', Department: 'HR', Email: 'sara@test.com', Nationality: 'Egyptian', CurrentStatus: 'Pending Validation', CreatedAt: '2026-06-03T09:00:00Z', DriveFolderID: 'folder-002' },
+        { CandidateID: 'c-003', FullName: 'Omar Khaled', Position: 'Mech. Engineer', Department: 'Maintenance', Email: 'omar@test.com', Nationality: 'Sudanese', CurrentStatus: 'Approved – Medical', CreatedAt: '2026-06-05T10:00:00Z', DriveFolderID: 'folder-003' },
+        { CandidateID: 'c-004', FullName: 'Nadia Youssef', Position: 'Accountant', Department: 'Finance', Email: 'nadia@test.com', Nationality: 'Egyptian', CurrentStatus: 'Mobilized', CreatedAt: '2026-05-20T07:00:00Z', DriveFolderID: 'folder-004' },
+        { CandidateID: 'c-005', FullName: 'Khaled Hassan', Position: 'Site Supervisor', Department: 'Projects', Email: 'khaled@test.com', Nationality: 'Jordanian', CurrentStatus: 'Documents Requested', CreatedAt: '2026-06-10T11:00:00Z', DriveFolderID: '' },
+      ];
+      const documents = [
+        { DocumentID: 'd-001', CandidateID: 'c-001', DocType: 'Passport', FileName: 'passport.pdf', FileURL: '#', UploadDate: '2026-06-02T08:00:00Z', ApprovalStatus: 'Approved', ApprovedBy: 'hr@company.com', VersionNumber: 1, Remarks: '' },
+        { DocumentID: 'd-002', CandidateID: 'c-001', DocType: 'Photo', FileName: 'photo.jpg', FileURL: '#', UploadDate: '2026-06-02T08:30:00Z', ApprovalStatus: 'Pending Review', ApprovedBy: '', VersionNumber: 1, Remarks: '' },
+        { DocumentID: 'd-003', CandidateID: 'c-001', DocType: 'Medical', FileName: 'medical.pdf', FileURL: '#', UploadDate: '2026-06-02T09:00:00Z', ApprovalStatus: 'Rejected', ApprovedBy: 'hr@company.com', VersionNumber: 1, Remarks: 'Illegible scan' },
+      ];
+      const logs = [
+        { LogID: 'l-1', Timestamp: '2026-06-01T08:00:00Z', CandidateID: 'c-001', Actor: 'SYSTEM', Event: 'Candidate Created: Ahmed Ali' },
+        { LogID: 'l-2', Timestamp: '2026-06-01T09:00:00Z', CandidateID: 'c-001', Actor: 'SYSTEM', Event: 'Drive Folder Created' },
+        { LogID: 'l-3', Timestamp: '2026-06-02T08:05:00Z', CandidateID: 'c-001', Actor: 'ahmed@test.com', Event: 'Document Uploaded: Passport' },
+        { LogID: 'l-4', Timestamp: '2026-06-03T10:00:00Z', CandidateID: 'c-001', Actor: 'hr@company.com', Event: 'Document Approved: Passport' },
+      ];
+
+      if (fnName === 'api_getDashboardData') return { success: true, data: { activeCount: 24, missingDocs: 12, pendingValidation: 5, mobilized: 8 } };
+      if (fnName === 'api_getAllCandidates') return { success: true, data: candidates };
+      if (fnName === 'api_createCandidate') return { success: true, candidateId: 'new-' + Date.now() };
+      if (fnName === 'api_updateCandidateStatus') return { success: true };
+      if (fnName === 'api_updateCandidateDetails') return { success: true };
+      if (fnName === 'api_getDocumentsByCandidate') return { success: true, data: documents.filter(d => d.CandidateID === args[0]) };
+      if (fnName === 'api_reviewDocument') return { success: true };
+      if (fnName === 'api_getAuditLog') return { success: true, data: logs.filter(l => l.CandidateID === args[0]) };
+      if (fnName === 'api_createCandidateFolder') return { success: true, folderId: 'mock-folder', url: '#' };
+      if (fnName === 'api_uploadFileToDrive') return { success: true, fileUrl: '#', documentId: 'mock-doc-id' };
+      if (fnName === 'api_sendRejectionEmail') return { success: true };
+      if (fnName === 'api_sendWelcomeEmail') return { success: true };
+      return { success: true };
+    }
+  };
+
+  // ─────────────────────────────────────────────
+  // TOAST NOTIFICATIONS
+  // ─────────────────────────────────────────────
+
+  const Toast = {
+    show(message, type = 'default', duration = 3500) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `toast toast--${type}`;
+      const icons = { success: '✅', error: '❌', warning: '⚠️', default: 'ℹ️' };
+      toast.innerHTML = `<span>${icons[type] || icons.default}</span><span>${message}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), duration);
+    },
+    success(msg) { this.show(msg, 'success'); },
+    error(msg) { this.show(msg, 'error'); },
+    warning(msg) { this.show(msg, 'warning'); }
+  };
+
+  // ─────────────────────────────────────────────
+  // MODAL HELPER
+  // ─────────────────────────────────────────────
+
+  const Modal = {
+    open(html) {
+      const root = document.getElementById('modal-root');
+      root.innerHTML = `
+      <div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true">
+        <div class="modal">${html}</div>
+      </div>`;
+      requestAnimationFrame(() => document.getElementById('modal-overlay').classList.add('open'));
+      document.getElementById('modal-overlay').addEventListener('click', e => {
+        if (e.target.id === 'modal-overlay') Modal.close();
+      });
+    },
+    close() {
+      const overlay = document.getElementById('modal-overlay');
+      if (!overlay) return;
+      overlay.classList.remove('open');
+      setTimeout(() => { document.getElementById('modal-root').innerHTML = ''; }, 250);
+    }
+  };
+
+  // ─────────────────────────────────────────────
+  // UTILITY HELPERS
+  // ─────────────────────────────────────────────
+
+  const fmt = {
+    date(iso) {
+      if (!iso) return '—';
+      try { return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }); }
+      catch (_) { return iso; }
+    },
+    dateTime(iso) {
+      if (!iso) return '—';
+      try { return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+      catch (_) { return iso; }
+    },
+    initials(name) {
+      return (name || '').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+    }
+  };
+
+  const statusBadge = (status) => {
+    const map = {
+      'Documents Requested': 'pending',
+      'documents requested': 'pending',
+      'Pending Validation': 'review',
+      'pending validation': 'review',
+      'Pending Review': 'review',
+      'Approved': 'approved',
+      'Approved – Medical': 'approved',
+      'Mobilized': 'mobilized',
+      'Closed': 'closed',
+      'Rejected': 'rejected',
+    };
+    const cls = map[status] || 'pending';
+    return `<span class="badge badge--${cls}">${status || 'Unknown'}</span>`;
+  };
+
+  const escHtml = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // ─────────────────────────────────────────────
+  // ROUTER
+  // ─────────────────────────────────────────────
+
+  const Router = {
+    navigate(view, params = {}) {
+      App.setState({ currentView: view, ...params });
+      renderSidebar();
+      renderView();
+      document.getElementById('app-view')?.focus();
+    }
+  };
+
+  // ─────────────────────────────────────────────
+  // TOPBAR RENDERER
+  // ─────────────────────────────────────────────
+
+  const renderTopbar = () => {
+    const { name, role } = App.state.currentUser;
+    document.getElementById('topbar').innerHTML = `
+    <div class="topbar__brand">
+      <div class="topbar__brand-icon" aria-hidden="true">HR</div>
+      <span>HR Mobilization System</span>
+    </div>
+    <div class="topbar__right">
+      <button class="notification-btn" id="notif-btn" aria-label="Notifications">
+        🔔
+        <span class="notification-btn__dot" aria-hidden="true"></span>
+      </button>
+      <div class="topbar__user" tabindex="0" role="button" aria-label="User profile">
+        <div class="topbar__avatar" aria-hidden="true">${fmt.initials(name)}</div>
+        <div>
+          <div class="topbar__username">${escHtml(name)}</div>
+          <div class="topbar__role-badge">${escHtml(role)}</div>
+        </div>
+      </div>
+    </div>`;
+  };
+
+  // ─────────────────────────────────────────────
+  // SIDEBAR RENDERER
+  // ─────────────────────────────────────────────
+
+  const sidebar_items = [
+    { view: 'dashboard', icon: '📊', label: 'Dashboard' },
+    { view: 'candidates', icon: '👥', label: 'Candidates', badge: () => App.state.candidates.filter(c => c.CurrentStatus === 'Documents Requested').length || '' },
+    { view: 'audit', icon: '📋', label: 'Audit Log' },
+  ];
+
+  const renderSidebar = () => {
+    const current = App.state.currentView;
+    const items = sidebar_items.map(item => {
+      const badge = item.badge ? item.badge() : '';
+      const badgeHtml = badge ? `<span class="nav__badge" aria-label="${badge} items">${badge}</span>` : '';
+      return `
+      <div class="nav__item ${current === item.view ? 'active' : ''}"
+           role="button" tabindex="0"
+           aria-current="${current === item.view ? 'page' : 'false'}"
+           onclick="Router.navigate('${item.view}')"
+           onkeydown="if(event.key==='Enter')Router.navigate('${item.view}')">
+        <span class="nav__item-icon" aria-hidden="true">${item.icon}</span>
+        <span>${item.label}</span>
+        ${badgeHtml}
+      </div>`;
+    }).join('');
+
+    document.getElementById('sidebar').innerHTML = `
+    <div class="sidebar__section-label">Main Menu</div>
+    ${items}
+    <div class="sidebar__footer">
+      Enterprise HR System v2.0<br>
+      &copy; 2026
+    </div>`;
+  };
+
+  // ─────────────────────────────────────────────
+  // VIEW DISPATCHER
+  // ─────────────────────────────────────────────
+
+  const renderView = () => {
+    const view = document.getElementById('app-view');
+    const { currentView } = App.state;
+    if (currentView === 'dashboard') Views.dashboard(view);
+    else if (currentView === 'candidates') Views.candidates(view);
+    else if (currentView === 'candidate-detail') Views.candidateDetail(view);
+    else if (currentView === 'new-candidate') Views.newCandidate(view);
+    else if (currentView === 'audit') Views.auditLog(view);
+    else view.innerHTML = '<div class="loading-overlay">404 — View not found.</div>';
+  };
+
+  // ─────────────────────────────────────────────
+  // VIEWS
+  // ─────────────────────────────────────────────
+
+  const Views = {
+
+    // ── DASHBOARD ──────────────────────────────
+    dashboard(container) {
+      container.innerHTML = `
+      <div class="page-header">
+        <div>
+          <h1 class="page-header__title">Dashboard</h1>
+          <p class="page-header__sub">Live overview of all mobilization cases — ${fmt.date(new Date().toISOString())}</p>
+        </div>
+        <div class="page-header__actions">
+          <button class="btn btn--outline btn--sm" onclick="Views._refreshDashboard()" aria-label="Refresh dashboard">
+            🔄 Refresh
+          </button>
+          <button class="btn btn--primary btn--sm" onclick="Router.navigate('new-candidate')">
+            ＋ New Candidate
+          </button>
+        </div>
+      </div>
+
+      <div class="kpi-grid" id="kpi-grid">
+        ${[1, 2, 3, 4].map(() => `<div class="kpi-card"><div class="skeleton" style="height:80px"></div></div>`).join('')}
+      </div>
+
+      <div class="table-card">
+        <div class="table-toolbar">
+          <span class="table-toolbar__title">Recent Candidates</span>
+          <button class="btn btn--outline btn--sm" onclick="Router.navigate('candidates')">View All →</button>
+        </div>
+        <div id="dashboard-table">
+          <div class="loading-overlay"><div class="spinner spinner--dark"></div>Loading…</div>
+        </div>
+      </div>`;
+
+      Views._refreshDashboard();
+    },
+
+    async _refreshDashboard() {
+      try {
+        const [kpiRes, candsRes] = await Promise.all([
+          GAS.call('api_getDashboardData'),
+          GAS.call('api_getAllCandidates')
+        ]);
+
+        if (kpiRes.success) {
+          const k = kpiRes.data;
+          document.getElementById('kpi-grid').innerHTML = `
+          ${Views._kpiCard('Active Cases', k.activeCount ?? '--', '🏗️', 'blue', 'Total mobilization cases in progress')}
+          ${Views._kpiCard('Missing Documents', k.missingDocs ?? '--', '❗', 'orange', 'Candidates awaiting uploads')}
+          ${Views._kpiCard('Pending Validation', k.pendingValidation ?? '--', '🔍', 'red', 'Documents under HR review')}
+          ${Views._kpiCard('Mobilized', k.mobilized ?? '--', '✈️', 'green', 'Successfully mobilized this cycle')}`;
+        }
+
+        if (candsRes.success) {
+          App.setState({ candidates: candsRes.data });
+          const recent = candsRes.data.slice(0, 5);
+          document.getElementById('dashboard-table').innerHTML = recent.length
+            ? Views._candidateTableHtml(recent)
+            : '<div class="table-empty"><div class="table-empty__icon">👥</div>No candidates yet.</div>';
+        }
+      } catch (err) {
+        Toast.error('Failed to load dashboard data.');
+        console.error(err);
+      }
+    },
+
+    _kpiCard(label, value, icon, color, footer) {
+      return `
+      <div class="kpi-card kpi-card--${color}">
+        <div class="kpi-card__label">${label}</div>
+        <div class="kpi-card__value">${value}</div>
+        <div class="kpi-card__footer">${footer}</div>
+        <div class="kpi-card__icon" aria-hidden="true">${icon}</div>
+      </div>`;
+    },
+
+    // ── CANDIDATES LIST ────────────────────────
+    candidates(container) {
+      container.innerHTML = `
+      <div class="page-header">
+        <div>
+          <h1 class="page-header__title">Candidates</h1>
+          <p class="page-header__sub">All mobilization candidates and their current status</p>
+        </div>
+        <div class="page-header__actions">
+          <button class="btn btn--outline btn--sm" onclick="Views._exportCandidates()" aria-label="Export candidates list">📤 Export</button>
+          <button class="btn btn--primary" onclick="Router.navigate('new-candidate')">＋ New Candidate</button>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-toolbar">
+          <span class="table-toolbar__title" id="cands-count">Loading…</span>
+          <div class="table-toolbar__actions">
+            <div class="search-input">
+              <span class="search-input__icon" aria-hidden="true">🔍</span>
+              <input type="search" id="search-input" placeholder="Search by name, email…"
+                     aria-label="Search candidates"
+                     oninput="Views._filterCandidates()" autocomplete="off">
+            </div>
+          </div>
+        </div>
+        <div class="filter-bar">
+          <label for="status-filter" style="font-size:.8rem;font-weight:600;color:var(--text-secondary)">Status:</label>
+          <select id="status-filter" aria-label="Filter by status" onchange="Views._filterCandidates()">
+            <option value="all">All Statuses</option>
+            <option value="Documents Requested">Documents Requested</option>
+            <option value="Pending Validation">Pending Validation</option>
+            <option value="Approved – Medical">Approved – Medical</option>
+            <option value="Mobilized">Mobilized</option>
+            <option value="Closed">Closed</option>
+          </select>
+        </div>
+        <div id="candidates-table">
+          <div class="loading-overlay"><div class="spinner spinner--dark"></div>Loading candidates…</div>
+        </div>
+        <div class="table-footer" id="table-footer"></div>
+      </div>`;
+
+      Views._loadCandidates();
+    },
+
+    async _loadCandidates() {
+      try {
+        const res = await GAS.call('api_getAllCandidates');
+        if (!res.success) throw new Error(res.error);
+        App.setState({ candidates: res.data, filteredCandidates: res.data });
+        Views._renderCandidatesTable(res.data);
+      } catch (err) {
+        document.getElementById('candidates-table').innerHTML =
+          `<div class="table-empty"><div class="table-empty__icon">⚠️</div>Failed to load: ${escHtml(err.message)}</div>`;
+        Toast.error('Failed to load candidates.');
+      }
+    },
+
+    _filterCandidates() {
+      const query = (document.getElementById('search-input')?.value || '').toLowerCase();
+      const status = document.getElementById('status-filter')?.value || 'all';
+      const data = App.state.candidates.filter(c => {
+        const matchQ = !query || c.FullName?.toLowerCase().includes(query) || c.Email?.toLowerCase().includes(query) || c.Position?.toLowerCase().includes(query);
+        const matchS = status === 'all' || c.CurrentStatus === status;
+        return matchQ && matchS;
+      });
+      Views._renderCandidatesTable(data);
+    },
+
+    _renderCandidatesTable(data) {
+      const count = document.getElementById('cands-count');
+      if (count) count.textContent = `${data.length} Candidate${data.length !== 1 ? 's' : ''}`;
+
+      const footer = document.getElementById('table-footer');
+      if (footer) footer.textContent = `Showing ${data.length} of ${App.state.candidates.length} candidates`;
+
+      document.getElementById('candidates-table').innerHTML = data.length
+        ? Views._candidateTableHtml(data)
+        : '<div class="table-empty"><div class="table-empty__icon">🔍</div>No candidates match your filters.</div>';
+    },
+
+    _candidateTableHtml(rows) {
+      const trs = rows.map(c => `
+      <tr>
+        <td>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:34px;height:34px;border-radius:50%;background:var(--primary-light);color:var(--primary);display:grid;place-items:center;font-weight:700;font-size:.78rem;flex-shrink:0">${fmt.initials(c.FullName)}</div>
+            <div>
+              <div class="td-primary">${escHtml(c.FullName)}</div>
+              <div class="td-secondary">${escHtml(c.Email)}</div>
+            </div>
+          </div>
+        </td>
+        <td>${escHtml(c.Position)}</td>
+        <td>${escHtml(c.Department)}</td>
+        <td>${escHtml(c.Nationality)}</td>
+        <td>${statusBadge(c.CurrentStatus)}</td>
+        <td>${fmt.date(c.CreatedAt)}</td>
+        <td>
+          <button class="btn btn--outline btn--sm"
+                  onclick="Router.navigate('candidate-detail',{selectedCandidate:${JSON.stringify(c).replace(/"/g, '&quot;')}})"
+                  aria-label="View ${escHtml(c.FullName)} details">View</button>
+        </td>
+      </tr>`).join('');
+
+      return `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Candidate</th>
+              <th scope="col">Position</th>
+              <th scope="col">Department</th>
+              <th scope="col">Nationality</th>
+              <th scope="col">Status</th>
+              <th scope="col">Created</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>`;
+    },
+
+    _exportCandidates() {
+      const data = App.state.filteredCandidates.length ? App.state.filteredCandidates : App.state.candidates;
+      const headers = ['CandidateID', 'FullName', 'Position', 'Department', 'Email', 'Nationality', 'CurrentStatus', 'CreatedAt'];
+      const csv = [headers.join(','), ...data.map(c => headers.map(h => `"${(c[h] || '').toString().replace(/"/g, '""')}"`).join(','))].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `candidates_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click(); URL.revokeObjectURL(url);
+      Toast.success('CSV exported successfully!');
+    },
+
+    // ── CANDIDATE DETAIL ───────────────────────
+    candidateDetail(container) {
+      const c = App.state.selectedCandidate;
+      if (!c) { Router.navigate('candidates'); return; }
+
+      const statusOptions = ['Documents Requested', 'Pending Validation', 'Approved – Medical', 'Mobilized', 'Closed'];
+
+      container.innerHTML = `
+      <div class="page-header">
+        <div>
+          <button class="btn btn--ghost btn--sm" onclick="Router.navigate('candidates')" style="margin-bottom:var(--sp-2);padding-left:0">
+            ← Back to Candidates
+          </button>
+          <h1 class="page-header__title">${escHtml(c.FullName)}</h1>
+          <p class="page-header__sub">${escHtml(c.Position)} · ${escHtml(c.Department)} · ${statusBadge(c.CurrentStatus)}</p>
+        </div>
+        <div class="page-header__actions">
+          <button class="btn btn--outline btn--sm" onclick="Views._openEditProfileModal('${escHtml(c.CandidateID)}')">
+            ✏️ Edit Profile
+          </button>
+          <button class="btn btn--outline btn--sm" onclick="Views._openStatusModal('${escHtml(c.CandidateID)}','${escHtml(c.FullName)}')">
+            🔄 Update Status
+          </button>
+          <button class="btn btn--primary" onclick="Views._openUploadModal('${escHtml(c.CandidateID)}','${escHtml(c.DriveFolderID || '')}')">
+            📤 Upload Document
+          </button>
+        </div>
+      </div>
+
+      <!-- Info Cards -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--sp-3);margin-bottom:var(--sp-4)">
+        ${Views._infoChip('Email', c.Email)}
+        ${Views._infoChip('Phone', c.Phone)}
+        ${Views._infoChip('Nationality', c.Nationality)}
+        ${Views._infoChip('Salary', c.OfferSalary ? c.OfferSalary + ' OMR' : '—')}
+        ${Views._infoChip('Joined', fmt.date(c.CreatedAt))}
+        ${Views._infoChip('Notes', c.Notes)}
+        ${Views._infoChip('Drive Folder', c.DriveFolderID
+        ? `<a href="https://drive.google.com/drive/folders/${escHtml(c.DriveFolderID)}" target="_blank" rel="noopener">Open Folder ↗</a>`
+        : '<em style="color:var(--text-muted)">No folder yet</em>')}
+      </div>
+
+      <!-- Documents Section -->
+      <div class="table-card" style="margin-bottom:var(--sp-4)">
+        <div class="table-toolbar">
+          <span class="table-toolbar__title">📎 Documents</span>
+        </div>
+        <div id="docs-section" style="padding:var(--sp-3)">
+          <div class="loading-overlay"><div class="spinner spinner--dark"></div>Loading documents…</div>
+        </div>
+      </div>
+
+      <!-- Audit Log Section -->
+      <div class="table-card">
+        <div class="table-toolbar">
+          <span class="table-toolbar__title">📋 Audit Log</span>
+        </div>
+        <div id="audit-section" style="padding:var(--sp-3)">
+          <div class="loading-overlay"><div class="spinner spinner--dark"></div>Loading log…</div>
+        </div>
+      </div>`;
+
+      Views._loadCandidateDocuments(c.CandidateID);
+      Views._loadCandidateAudit(c.CandidateID);
+    },
+
+    _infoChip(label, value) {
+      return `
+      <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
+        <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-bottom:4px">${label}</div>
+        <div style="font-size:.9rem;font-weight:600">${value || '—'}</div>
+      </div>`;
+    },
+
+    async _loadCandidateDocuments(candidateId) {
+      try {
+        const res = await GAS.call('api_getDocumentsByCandidate', candidateId);
+        if (!res.success) throw new Error(res.error);
+        const docs = res.data;
+        const el = document.getElementById('docs-section');
+        if (!el) return;
+
+        if (!docs.length) {
+          el.innerHTML = '<div class="table-empty"><div class="table-empty__icon">📭</div>No documents uploaded yet.</div>';
+          return;
+        }
+
+        el.innerHTML = docs.map(d => `
+        <div class="doc-row">
+          <div class="doc-row__icon" aria-hidden="true">${d.FileName?.endsWith('.pdf') ? '📄' : '🖼️'}</div>
+          <div class="doc-row__info">
+            <div class="doc-row__name">${escHtml(d.DocType)} — v${d.VersionNumber || 1}</div>
+            <div class="doc-row__meta">${escHtml(d.FileName)} · Uploaded ${fmt.date(d.UploadDate)}</div>
+          </div>
+          <div style="margin:0 var(--sp-2)">${statusBadge(d.ApprovalStatus)}</div>
+          <div class="doc-row__actions">
+            ${d.FileURL && d.FileURL !== '#' ? `<a href="${escHtml(d.FileURL)}" target="_blank" rel="noopener" class="btn btn--outline btn--sm" aria-label="View ${escHtml(d.DocType)}">View ↗</a>` : ''}
+            ${d.ApprovalStatus === 'Pending Review' ? `
+              <button class="btn btn--success btn--sm" onclick="Views._reviewDoc('${escHtml(d.DocumentID)}','${escHtml(d.CandidateID)}','Approved','')" aria-label="Approve ${escHtml(d.DocType)}">✓ Approve</button>
+              <button class="btn btn--danger btn--sm"  onclick="Views._openRejectModal('${escHtml(d.DocumentID)}','${escHtml(d.CandidateID)}','${escHtml(d.DocType)}')" aria-label="Reject ${escHtml(d.DocType)}">✗ Reject</button>
+            ` : ''}
+          </div>
+        </div>`).join('');
+      } catch (err) {
+        const el = document.getElementById('docs-section');
+        if (el) el.innerHTML = `<div class="table-empty">⚠️ ${escHtml(err.message)}</div>`;
+      }
+    },
+
+    async _loadCandidateAudit(candidateId) {
+      try {
+        const res = await GAS.call('api_getAuditLog', candidateId);
+        if (!res.success) throw new Error(res.error);
+        const el = document.getElementById('audit-section');
+        if (!el) return;
+
+        if (!res.data.length) {
+          el.innerHTML = '<div class="table-empty"><div class="table-empty__icon">📋</div>No audit entries.</div>';
+          return;
+        }
+
+        el.innerHTML = `<div class="timeline">
+        ${res.data.slice().reverse().map(log => `
+          <div class="timeline__item">
+            <div class="timeline__time">${fmt.dateTime(log.Timestamp)}</div>
+            <div class="timeline__event">${escHtml(log.Event)}</div>
+            <div class="timeline__actor">by ${escHtml(log.Actor)}</div>
+          </div>`).join('')}
+      </div>`;
+      } catch (err) {
+        const el = document.getElementById('audit-section');
+        if (el) el.innerHTML = `<div class="table-empty">⚠️ ${escHtml(err.message)}</div>`;
+      }
+    },
+
+    async _reviewDoc(documentId, candidateId, action, remarks) {
+      try {
+        const res = await GAS.call('api_reviewDocument', documentId, action, remarks);
+        if (!res.success) throw new Error(res.error);
+        Toast.success(`Document ${action} successfully.`);
+        Views._loadCandidateDocuments(candidateId);
+        Views._loadCandidateAudit(candidateId);
+      } catch (err) {
+        Toast.error('Action failed: ' + err.message);
+      }
+    },
+
+    _openRejectModal(documentId, candidateId, docType) {
+      Modal.open(`
+      <div class="modal__header">
+        <h2 class="modal__title">✗ Reject Document</h2>
+        <button class="modal__close" onclick="Modal.close()" aria-label="Close">✕</button>
+      </div>
+      <div class="modal__body">
+        <p style="margin-bottom:var(--sp-3);color:var(--text-secondary)">
+          Rejecting <strong>${escHtml(docType)}</strong>. An email will notify the candidate to re-upload.
+        </p>
+        <div class="form-group">
+          <label class="form-label" for="reject-reason">Rejection Reason <span class="required">*</span></label>
+          <textarea class="form-textarea" id="reject-reason" rows="3"
+                    placeholder="e.g. Image is blurry, expired document…" required></textarea>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn--outline" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn--danger"  onclick="Views._submitReject('${escHtml(documentId)}','${escHtml(candidateId)}','${escHtml(docType)}')">Reject & Notify</button>
+      </div>`);
+    },
+
+    async _submitReject(documentId, candidateId, docType) {
+      const reason = document.getElementById('reject-reason')?.value?.trim();
+      if (!reason) { Toast.warning('Please enter a rejection reason.'); return; }
+      Modal.close();
+      await Views._reviewDoc(documentId, candidateId, 'Rejected', reason);
+    },
+
+    _openStatusModal(candidateId, candidateName) {
+      const options = ['Documents Requested', 'Pending Validation', 'Approved – Medical', 'Mobilized', 'Closed'];
+      Modal.open(`
+      <div class="modal__header">
+        <h2 class="modal__title">🔄 Update Status</h2>
+        <button class="modal__close" onclick="Modal.close()" aria-label="Close">✕</button>
+      </div>
+      <div class="modal__body">
+        <p style="margin-bottom:var(--sp-3);color:var(--text-secondary)">Update mobilization status for <strong>${escHtml(candidateName)}</strong></p>
+        <div class="form-group">
+          <label class="form-label" for="new-status">New Status <span class="required">*</span></label>
+          <select class="form-select" id="new-status">
+            ${options.map(o => `<option value="${o}">${o}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn--outline" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn--primary" onclick="Views._submitStatus('${candidateId}')">Save Status</button>
+      </div>`);
+    },
+
+    async _submitStatus(candidateId) {
+      const newStatus = document.getElementById('new-status')?.value;
+      if (!newStatus) return;
+      Modal.close();
+      try {
+        const res = await GAS.call('api_updateCandidateStatus', candidateId, newStatus);
+        if (!res.success) throw new Error(res.error);
+        // Update local state
+        const cand = App.state.candidates.find(c => c.CandidateID === candidateId);
+        if (cand) cand.CurrentStatus = newStatus;
+        if (App.state.selectedCandidate?.CandidateID === candidateId)
+          App.state.selectedCandidate.CurrentStatus = newStatus;
+        Toast.success('Status updated to: ' + newStatus);
+        Router.navigate('candidate-detail');
+      } catch (err) {
+        Toast.error('Update failed: ' + err.message);
+      }
+    },
+
+    _openEditProfileModal(candidateId) {
+      const c = App.state.candidates.find(cand => cand.CandidateID === candidateId);
+      if (!c) return;
+
+      Modal.open(`
+      <div class="modal__header">
+        <h2 class="modal__title">✏️ Edit Profile</h2>
+        <button class="modal__close" onclick="Modal.close()" aria-label="Close">✕</button>
+      </div>
+      <div class="modal__body">
+        <p style="margin-bottom:var(--sp-3);color:var(--text-secondary)">Editing details for <strong>${escHtml(c.FullName)}</strong></p>
+        <div class="form-grid">
+          <div class="form-group col-span-2">
+            <label class="form-label" for="edit-phone">Phone Number <span class="required">*</span></label>
+            <input type="tel" class="form-input" id="edit-phone" value="${escHtml(c.Phone || '')}" required />
+          </div>
+          <div class="form-group col-span-2">
+            <label class="form-label" for="edit-notes">Notes</label>
+            <textarea class="form-textarea" id="edit-notes" rows="4" placeholder="Add additional instructions or remarks...">${escHtml(c.Notes || '')}</textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn--outline" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn--primary" id="edit-save-btn" onclick="Views._submitEditProfile('${candidateId}')">Save Changes</button>
+      </div>`);
+    },
+
+    async _submitEditProfile(candidateId) {
+      const phone = document.getElementById('edit-phone')?.value?.trim();
+      const notes = document.getElementById('edit-notes')?.value?.trim();
+
+      if (!phone) { Toast.warning('Phone number is required.'); return; }
+
+      const btn = document.getElementById('edit-save-btn');
+      btn.disabled = true;
+      btn.innerHTML = 'Saving...';
+
+      try {
+        const res = await GAS.call('api_updateCandidateDetails', candidateId, { phone, notes });
+        if (!res.success) throw new Error(res.error);
+
+        // Update local state
+        const cand = App.state.candidates.find(c => c.CandidateID === candidateId);
+        if (cand) {
+          cand.Phone = phone;
+          cand.Notes = notes;
+        }
+        if (App.state.selectedCandidate?.CandidateID === candidateId) {
+          App.state.selectedCandidate.Phone = phone;
+          App.state.selectedCandidate.Notes = notes;
+        }
+
+        Modal.close();
+        Toast.success('Profile updated successfully!');
+        Router.navigate('candidate-detail'); // Re-render detail view to show new values
+      } catch (err) {
+        Toast.error('Failed to update: ' + err.message);
+        btn.disabled = false;
+        btn.innerHTML = 'Save Changes';
+      }
+    },
+
+    _openUploadModal(candidateId, folderId) {
+      const docTypes = ['Passport', 'Photo', 'Graduation Certificate', 'Medical Examination', 'Medical Analysis', 'Experience Letter', 'Other'];
+      Modal.open(`
+      <div class="modal__header">
+        <h2 class="modal__title">📤 Upload Document</h2>
+        <button class="modal__close" onclick="Modal.close()" aria-label="Close">✕</button>
+      </div>
+      <div class="modal__body">
+        <div class="form-grid" style="gap:var(--sp-3)">
+          <div class="form-group col-span-2">
+            <label class="form-label" for="doc-type">Document Type <span class="required">*</span></label>
+            <select class="form-select" id="doc-type">
+              ${docTypes.map(t => `<option value="${t}">${t}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group col-span-2">
+            <label class="form-label">File <span class="required">*</span></label>
+            <div class="upload-zone" id="upload-zone">
+              <input type="file" id="upload-file" accept=".pdf,.jpg,.jpeg,.png"
+                     aria-label="Select document file"
+                     onchange="Views._onFileSelect(this)">
+              <div class="upload-zone__icon" aria-hidden="true">📁</div>
+              <div class="upload-zone__label" id="upload-label">Click to select or drag & drop</div>
+              <div class="upload-zone__hint">PDF, JPG, PNG — max 10 MB</div>
+            </div>
+          </div>
+        </div>
+        <div id="upload-progress" style="display:none;margin-top:var(--sp-3)">
+          <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+            <div id="upload-bar" style="height:100%;width:0;background:var(--primary);transition:width .3s ease"></div>
+          </div>
+          <p style="font-size:.8rem;color:var(--text-secondary);margin-top:6px" id="upload-status-msg">Preparing…</p>
+        </div>
+      </div>
+      <div class="modal__footer">
+        <button class="btn btn--outline" onclick="Modal.close()">Cancel</button>
+        <button class="btn btn--primary" id="upload-btn"
+                onclick="Views._submitUpload('${candidateId}','${folderId}')">Upload</button>
+      </div>`);
+    },
+
+    _onFileSelect(input) {
+      const file = input.files[0];
+      if (file) {
+        document.getElementById('upload-label').textContent = `📎 ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+      }
+    },
+
+    async _submitUpload(candidateId, folderId) {
+      const fileInput = document.getElementById('upload-file');
+      const docType = document.getElementById('doc-type')?.value;
+      const file = fileInput?.files[0];
+
+      if (!file) { Toast.warning('Please select a file.'); return; }
+      if (file.size > 10 * 1024 * 1024) { Toast.warning('File exceeds 10 MB limit.'); return; }
+
+      const btn = document.getElementById('upload-btn');
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner"></span> Uploading…`;
+
+      const progress = document.getElementById('upload-progress');
+      const bar = document.getElementById('upload-bar');
+      const statusMsg = document.getElementById('upload-status-msg');
+      progress.style.display = 'block';
+
+      try {
+        // Read file as base64
+        statusMsg.textContent = 'Reading file…';
+        bar.style.width = '20%';
+
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = e => resolve(e.target.result.split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        statusMsg.textContent = 'Uploading to Google Drive…';
+        bar.style.width = '60%';
+
+        // Ensure folder exists
+        let actualFolderId = folderId;
+        if (!actualFolderId) {
+          const cand = App.state.selectedCandidate;
+          const folderRes = await GAS.call('api_createCandidateFolder', candidateId, cand?.FullName || candidateId);
+          if (!folderRes.success) throw new Error(folderRes.error);
+          actualFolderId = folderRes.folderId;
+        }
+
+        const res = await GAS.call('api_uploadFileToDrive', candidateId, actualFolderId, docType, file.name, base64, file.type);
+        if (!res.success) throw new Error(res.error);
+
+        bar.style.width = '100%';
+        statusMsg.textContent = 'Complete!';
+
+        setTimeout(() => {
+          Modal.close();
+          Toast.success(`${docType} uploaded successfully!`);
+          Views._loadCandidateDocuments(candidateId);
+          Views._loadCandidateAudit(candidateId);
+        }, 500);
+      } catch (err) {
+        Toast.error('Upload failed: ' + err.message);
+        btn.disabled = false;
+        btn.innerHTML = 'Upload';
+        progress.style.display = 'none';
+      }
+    },
+
+    // ── NEW CANDIDATE FORM ─────────────────────
+    newCandidate(container) {
+      container.innerHTML = `
+      <div class="page-header">
+        <div>
+          <button class="btn btn--ghost btn--sm" onclick="Router.navigate('candidates')" style="margin-bottom:var(--sp-2);padding-left:0">
+            ← Back to Candidates
+          </button>
+          <h1 class="page-header__title">New Candidate</h1>
+          <p class="page-header__sub">Register a new candidate and initiate the mobilization process</p>
+        </div>
+      </div>
+
+      <!-- Workflow Steps -->
+      <div class="steps" role="list" aria-label="Registration steps">
+        <div class="step active" role="listitem"><div class="step__circle">1</div><div class="step__label">Basic Info</div></div>
+        <div class="step" role="listitem"><div class="step__circle">2</div><div class="step__label">Contract</div></div>
+        <div class="step" role="listitem"><div class="step__circle">3</div><div class="step__label">Send Invite</div></div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-toolbar">
+          <span class="table-toolbar__title">Candidate Information</span>
+        </div>
+        <div style="padding:var(--sp-4)">
+          <form id="new-candidate-form" onsubmit="Views._submitNewCandidate(event)">
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label" for="nc-name">Full Name <span class="required">*</span></label>
+                <input class="form-input" type="text" id="nc-name" required placeholder="Ahmed Ali" autocomplete="name">
+                <span class="form-error" id="err-name"></span>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="nc-email">Email Address <span class="required">*</span></label>
+                <input class="form-input" type="email" id="nc-email" required placeholder="ahmed@example.com" autocomplete="email">
+                <span class="form-error" id="err-email"></span>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="nc-phone">Phone Number <span class="required">*</span></label>
+                <input class="form-input" type="tel" id="nc-phone" required placeholder="+201012345678">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="nc-nationality">Nationality <span class="required">*</span></label>
+                <select class="form-select" id="nc-nationality" required>
+                  <option value="">Select nationality…</option>
+                  <option>Egyptian</option><option>Sudanese</option><option>Jordanian</option>
+                  <option>Saudi</option><option>Yemeni</option><option>Moroccan</option><option>Other</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="nc-position">Job Position <span class="required">*</span></label>
+                <input class="form-input" type="text" id="nc-position" required placeholder="Civil Engineer">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="nc-department">Department <span class="required">*</span></label>
+                <select class="form-select" id="nc-department" required>
+                  <option value="">Select department…</option>
+                  <option>Projects</option><option>Maintenance</option><option>Finance</option>
+                  <option>HR</option><option>Operations</option><option>IT</option><option>Safety</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="nc-salary">Salary (OMR) <span class="required">*</span></label>
+                <input class="form-input" type="number" id="nc-salary" required placeholder="350" min="0" step="0.5">
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="nc-coordinator">Assigned Coordinator Email</label>
+                <input class="form-input" type="email" id="nc-coordinator" placeholder="coordinator@company.com">
+              </div>
+            </div>
+
+            <div style="margin-top:var(--sp-4);display:flex;gap:var(--sp-2);justify-content:flex-end">
+              <button type="button" class="btn btn--outline" onclick="Router.navigate('candidates')">Cancel</button>
+              <button type="submit" class="btn btn--primary" id="submit-btn">
+                ＋ Create Candidate & Send Invitation
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>`;
+    },
+
+    async _submitNewCandidate(e) {
+      e.preventDefault();
+      const btn = document.getElementById('submit-btn');
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner"></span> Creating…`;
+
+      const payload = {
+        fullName: document.getElementById('nc-name').value.trim(),
+        email: document.getElementById('nc-email').value.trim(),
+        phone: document.getElementById('nc-phone').value.trim(),
+        nationality: document.getElementById('nc-nationality').value,
+        position: document.getElementById('nc-position').value.trim(),
+        department: document.getElementById('nc-department').value,
+        salary: document.getElementById('nc-salary').value,
+        coordinatorEmail: document.getElementById('nc-coordinator').value.trim() || App.state.currentUser.email
+      };
+
+      try {
+        const res = await GAS.call('api_createCandidate', payload);
+        if (!res.success) throw new Error(res.error);
+
+        // Auto-create Drive folder
+        await GAS.call('api_createCandidateFolder', res.candidateId, payload.fullName);
+
+        // Dispatch Welcome Email
+        const emailRes = await GAS.call('api_sendWelcomeEmail', payload.email, payload.fullName, res.candidateId);
+        if (!emailRes.success) throw new Error("Candidate and folder created, but email failed: " + emailRes.error);
+
+        Toast.success(`✅ ${payload.fullName} registered! Invitation sent.`);
+        // Refresh candidates list
+        const allRes = await GAS.call('api_getAllCandidates');
+        if (allRes.success) App.setState({ candidates: allRes.data });
+        Router.navigate('candidates');
+      } catch (err) {
+        Toast.error('Failed to create candidate: ' + err.message);
+        btn.disabled = false;
+        btn.innerHTML = '＋ Create Candidate & Send Invitation';
+      }
+    },
+
+    // ── AUDIT LOG (Global) ─────────────────────
+    auditLog(container) {
+      container.innerHTML = `
+      <div class="page-header">
+        <div>
+          <h1 class="page-header__title">Audit Log</h1>
+          <p class="page-header__sub">Complete system activity history across all candidates</p>
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="table-toolbar">
+          <span class="table-toolbar__title">All System Events</span>
+          <div class="table-toolbar__actions">
+            <div class="search-input">
+              <span class="search-input__icon" aria-hidden="true">🔍</span>
+              <input type="search" id="audit-search" placeholder="Search candidate…"
+                     aria-label="Search audit log" oninput="Views._filterAudit()">
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="audit-table">
+            <thead>
+              <tr>
+                <th scope="col">Timestamp</th>
+                <th scope="col">Candidate ID</th>
+                <th scope="col">Actor</th>
+                <th scope="col">Event</th>
+              </tr>
+            </thead>
+            <tbody id="audit-tbody">
+              <tr><td colspan="4"><div class="loading-overlay"><div class="spinner spinner--dark"></div>Loading…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+      Views._loadAllAuditLogs();
+    },
+
+    _allLogs: [],
+
+    async _loadAllAuditLogs() {
+      try {
+        const candsRes = await GAS.call('api_getAllCandidates');
+        if (!candsRes.success) throw new Error(candsRes.error);
+        const cands = candsRes.data.slice(0, 20); // limit for performance
+
+        const logPromises = cands.map(c => GAS.call('api_getAuditLog', c.CandidateID));
+        const results = await Promise.all(logPromises);
+
+        Views._allLogs = results.flatMap((r, i) =>
+          r.success ? r.data.map(l => ({ ...l, _candidateName: cands[i].FullName })) : []
+        ).sort((a, b) => new Date(b.Timestamp) - new Date(a.Timestamp));
+
+        Views._renderAuditTable(Views._allLogs);
+      } catch (err) {
+        document.getElementById('audit-tbody').innerHTML =
+          `<tr><td colspan="4"><div class="table-empty">⚠️ ${escHtml(err.message)}</div></td></tr>`;
+        Toast.error('Failed to load audit log.');
+      }
+    },
+
+    _filterAudit() {
+      const q = document.getElementById('audit-search')?.value?.toLowerCase() || '';
+      const filtered = q
+        ? Views._allLogs.filter(l => l._candidateName?.toLowerCase().includes(q) || l.Event?.toLowerCase().includes(q) || l.Actor?.toLowerCase().includes(q))
+        : Views._allLogs;
+      Views._renderAuditTable(filtered);
+    },
+
+    _renderAuditTable(logs) {
+      const tbody = document.getElementById('audit-tbody');
+      if (!tbody) return;
+      tbody.innerHTML = logs.length
+        ? logs.map(l => `
+          <tr>
+            <td style="white-space:nowrap">${fmt.dateTime(l.Timestamp)}</td>
+            <td>
+              <span style="font-size:.78rem;font-family:monospace;color:var(--text-secondary)">${escHtml((l.CandidateID || '').slice(0, 8))}…</span>
+              ${l._candidateName ? `<div style="font-size:.78rem;color:var(--text-muted)">${escHtml(l._candidateName)}</div>` : ''}
+            </td>
+            <td>${escHtml(l.Actor)}</td>
+            <td>${escHtml(l.Event)}</td>
+          </tr>`).join('')
+        : `<tr><td colspan="4"><div class="table-empty"><div class="table-empty__icon">📋</div>No log entries found.</div></td></tr>`;
+    }
+  };
+
+  // ─────────────────────────────────────────────
+  // APP INIT
+  // ─────────────────────────────────────────────
+
+  const initApp = () => {
+    // Resolve current user email if in GAS environment
+    if (GAS.isLive && typeof google !== 'undefined') {
+      try {
+        // Attempt to pre-fetch user info (non-blocking)
+      } catch (_) { }
+    }
+
+    renderTopbar();
+    renderSidebar();
+    Router.navigate('dashboard');
+  };
+
+  document.addEventListener('DOMContentLoaded', initApp);
+</script>
